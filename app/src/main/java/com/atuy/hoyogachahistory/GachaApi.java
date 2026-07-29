@@ -1,7 +1,5 @@
 package com.atuy.hoyogachahistory;
 
-import android.database.sqlite.SQLiteDatabase;
-
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -28,55 +26,47 @@ public final class GachaApi {
     public static int fetchAll(GameConfig game, String capturedUrl, HistoryDb historyDb) throws Exception {
         String prefix = normalizePrefix(game, capturedUrl);
         int imported = 0;
-        SQLiteDatabase db = historyDb.getWritableDatabase();
-        db.beginTransaction();
-        try {
-            for (int type : game.gachaTypes) {
-                String endpoint = prefix;
-                if (game == GameConfig.STAR_RAIL && (type == 21 || type == 22)) {
-                    endpoint = prefix.replace("/getGachaLog", "/getLdGachaLog");
-                }
 
-                String endId = "0";
-                for (int page = 1; page <= 200; page++) {
-                    String requestUrl = endpoint +
-                            "&" + game.typeParameter + "=" + type +
-                            "&page=" + page +
-                            "&size=20" +
-                            "&end_id=" + endId;
-
-                    JSONObject response = getJson(requestUrl);
-                    int retcode = response.optInt("retcode", -1);
-                    if (retcode != 0) {
-                        throw new IllegalStateException(
-                                "HoYoverse API error " + retcode + ": " + response.optString("message", "unknown")
-                        );
-                    }
-
-                    JSONObject data = response.optJSONObject("data");
-                    JSONArray list = data == null ? null : data.optJSONArray("list");
-                    if (list == null || list.length() == 0) {
-                        break;
-                    }
-
-                    for (int i = 0; i < list.length(); i++) {
-                        JSONObject item = list.getJSONObject(i);
-                        if (!item.optString("id").isEmpty()) {
-                            historyDb.upsert(db, game.key, item);
-                            imported++;
-                        }
-                    }
-
-                    if (list.length() < 20) {
-                        break;
-                    }
-                    endId = list.getJSONObject(list.length() - 1).optString("id", "0");
-                    Thread.sleep(250L);
-                }
+        for (int type : game.gachaTypes) {
+            String endpoint = prefix;
+            if (game == GameConfig.STAR_RAIL && (type == 21 || type == 22)) {
+                endpoint = prefix.replace("/getGachaLog", "/getLdGachaLog");
             }
-            db.setTransactionSuccessful();
-        } finally {
-            db.endTransaction();
+
+            String endId = "0";
+            for (int page = 1; page <= 200; page++) {
+                String requestUrl = endpoint +
+                        "&" + game.typeParameter + "=" + type +
+                        "&page=" + page +
+                        "&size=20" +
+                        "&end_id=" + endId;
+
+                // Network I/O must stay outside a SQLite transaction. Holding a write
+                // transaction here used to lock the database for the entire import.
+                JSONObject response = getJson(requestUrl);
+                int retcode = response.optInt("retcode", -1);
+                if (retcode != 0) {
+                    throw new IllegalStateException(
+                            "HoYoverse API error " + retcode + ": " + response.optString("message", "unknown")
+                    );
+                }
+
+                JSONObject data = response.optJSONObject("data");
+                JSONArray list = data == null ? null : data.optJSONArray("list");
+                if (list == null || list.length() == 0) {
+                    break;
+                }
+
+                // Commit only this page (at most 20 rows), then immediately release
+                // the writer lock before the next request or delay.
+                imported += historyDb.upsertPage(game.key, list);
+
+                if (list.length() < 20) {
+                    break;
+                }
+                endId = list.getJSONObject(list.length() - 1).optString("id", "0");
+                Thread.sleep(250L);
+            }
         }
         return imported;
     }
