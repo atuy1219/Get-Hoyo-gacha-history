@@ -43,7 +43,8 @@ public final class GachaApi {
                 endpoint = prefix.replace("/getGachaLog", "/getLdGachaLog");
             }
 
-            String latestStoredId = historyDb.latestId(game.key, Integer.toString(type));
+            String queryType = Integer.toString(type);
+            String latestStoredId = historyDb.latestId(game.key, queryType);
             String endId = "0";
 
             for (int page = 0; page < 200; page++) {
@@ -80,7 +81,7 @@ public final class GachaApi {
                 }
 
                 if (newItems.length() > 0) {
-                    imported += historyDb.upsertPage(game.key, newItems);
+                    imported += historyDb.upsertPage(game.key, queryType, newItems);
                 }
 
                 if (reachedStoredHistory || list.length() < ITEMS_PER_PAGE) {
