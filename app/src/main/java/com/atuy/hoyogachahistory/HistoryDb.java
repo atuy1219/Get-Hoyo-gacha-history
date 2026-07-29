@@ -88,6 +88,18 @@ public final class HistoryDb extends SQLiteOpenHelper {
                 : lastLock;
     }
 
+    public String latestId(String game, String gachaType) {
+        return readWithRetry(db -> {
+            try (Cursor cursor = db.rawQuery(
+                    "SELECT id FROM history WHERE game=? AND gacha_type=? " +
+                            "ORDER BY time DESC, id DESC LIMIT 1",
+                    new String[]{game, gachaType}
+            )) {
+                return cursor.moveToFirst() ? cursor.getString(0) : null;
+            }
+        });
+    }
+
     public Stats stats(String game) {
         return readWithRetry(db -> {
             int total = 0;
