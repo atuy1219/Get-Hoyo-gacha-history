@@ -22,12 +22,6 @@ public final class HistoryDb extends SQLiteOpenHelper {
     }
 
     @Override
-    public void onConfigure(SQLiteDatabase db) {
-        super.onConfigure(db);
-        db.execSQL("PRAGMA busy_timeout=5000");
-    }
-
-    @Override
     public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE history (" +
                 "game TEXT NOT NULL," +
