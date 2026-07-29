@@ -19,6 +19,7 @@ import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -29,7 +30,10 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import rikka.shizuku.Shizuku;
 
@@ -38,6 +42,7 @@ public final class MainActivity extends Activity {
     private static final int NOTIFICATION_PERMISSION_REQUEST = 1220;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor();
     private final Map<GameConfig, TextView> statsViews = new EnumMap<>(GameConfig.class);
     private final Map<GameConfig, TextView> statusViews = new EnumMap<>(GameConfig.class);
     private TextView shizukuStatus;
@@ -47,7 +52,9 @@ public final class MainActivity extends Activity {
     private final Shizuku.OnBinderDeadListener binderDeadListener = this::refreshShizukuStatus;
     private final Shizuku.OnRequestPermissionResultListener permissionResultListener = (requestCode, grantResult) -> {
         refreshShizukuStatus();
-        if (requestCode == SHIZUKU_PERMISSION_REQUEST && grantResult == PackageManager.PERMISSION_GRANTED && pendingGame != null) {
+        if (requestCode == SHIZUKU_PERMISSION_REQUEST
+                && grantResult == PackageManager.PERMISSION_GRANTED
+                && pendingGame != null) {
             GameConfig game = pendingGame;
             pendingGame = null;
             beginCapture(game);
@@ -83,10 +90,14 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        unregisterReceiver(updateReceiver);
+        try {
+            unregisterReceiver(updateReceiver);
+        } catch (Exception ignored) {
+        }
         Shizuku.removeBinderReceivedListener(binderReceivedListener);
         Shizuku.removeBinderDeadListener(binderDeadListener);
         Shizuku.removeRequestPermissionResultListener(permissionResultListener);
+        dbExecutor.shutdownNow();
         super.onDestroy();
     }
 
@@ -107,7 +118,7 @@ public final class MainActivity extends Activity {
         root.addView(title);
 
         TextView subtitle = text(
-                "Shizukuでゲームのlogcatから認証URLを検出し、公式APIの履歴を端末内に保存します。",
+                "Shizukuで認証URLを取得し、ガチャ種別ごとの天井・排出履歴を端末内で計算します。",
                 14,
                 false
         );
@@ -131,40 +142,39 @@ public final class MainActivity extends Activity {
         }
 
         TextView note = text(
-                "取得方法: ボタンを押す → ゲームが開く → ガチャ画面の「履歴」を開く。監視は2分で終了します。認証URLは保存しません。",
-                13,
+                "確率は基礎排出率・ソフト天井・確定天井から算出した推定値です。ゲーム内の表示や仕様変更を優先してください。",
+                12,
                 false
         );
         note.setTextColor(Color.DKGRAY);
-        note.setPadding(dp(2), dp(8), dp(2), 0);
         root.addView(note);
         return scrollView;
     }
 
     private View buildGameCard(GameConfig game) {
-        LinearLayout card = card();
+        LinearLayout gameCard = card();
         TextView name = text(game.displayName, 20, true);
-        card.addView(name);
+        gameCard.addView(name);
 
-        TextView stats = text("履歴なし", 15, false);
+        TextView stats = text("履歴を読み込み中", 15, false);
         stats.setPadding(0, dp(8), 0, dp(2));
         statsViews.put(game, stats);
-        card.addView(stats);
+        gameCard.addView(stats);
 
         TextView status = text("未取得", 13, false);
         status.setTextColor(Color.DKGRAY);
         status.setPadding(0, 0, 0, dp(8));
         statusViews.put(game, status);
-        card.addView(status);
+        gameCard.addView(status);
 
         Button capture = button("履歴を自動取得");
         capture.setOnClickListener(v -> requestCapture(game));
-        card.addView(capture, matchWidth());
+        gameCard.addView(capture, matchWidth());
 
-        Button show = button("保存済み履歴を見る");
-        show.setOnClickListener(v -> showHistory(game));
-        card.addView(show, matchWidth());
-        return card;
+        Button dashboard = button("ガチャ別の天井・履歴を見る");
+        dashboard.setOnClickListener(v -> showBannerDashboard(game));
+        gameCard.addView(dashboard, matchWidth());
+        return gameCard;
     }
 
     private void requestCapture(GameConfig game) {
@@ -262,66 +272,220 @@ public final class MainActivity extends Activity {
     }
 
     private void requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATION_PERMISSION_REQUEST);
         }
     }
 
     private void refreshAllCards() {
-        HistoryDb db = new HistoryDb(this);
-        for (GameConfig game : GameConfig.values()) {
-            HistoryDb.Stats stats = db.stats(game.key);
-            TextView statsView = statsViews.get(game);
-            if (statsView != null) {
-                String latest = stats.latest.isEmpty() ? "なし" : stats.latest;
-                statsView.setText("保存: " + stats.total + "件 / ★5: " + stats.fiveStar + "件\n最終履歴: " + latest);
+        dbExecutor.execute(() -> {
+            Map<GameConfig, HistoryDb.Stats> values = new EnumMap<>(GameConfig.class);
+            try (HistoryDb db = new HistoryDb(this)) {
+                for (GameConfig game : GameConfig.values()) {
+                    values.put(game, db.stats(game));
+                }
+            } catch (Throwable error) {
+                handler.post(() -> Toast.makeText(this, "履歴の読み込みに失敗しました", Toast.LENGTH_SHORT).show());
+                return;
             }
-            TextView statusView = statusViews.get(game);
-            if (statusView != null) {
-                String value = getSharedPreferences("capture_status", MODE_PRIVATE)
-                        .getString(game.key, "未取得");
-                statusView.setText(value);
-            }
-        }
-        db.close();
+
+            handler.post(() -> {
+                for (GameConfig game : GameConfig.values()) {
+                    HistoryDb.Stats stats = values.get(game);
+                    TextView statsView = statsViews.get(game);
+                    if (statsView != null && stats != null) {
+                        String latest = stats.latest.isEmpty() ? "なし" : stats.latest;
+                        statsView.setText(
+                                "保存: " + stats.total + "件 / " + game.topRankLabel + ": " + stats.fiveStar + "件\n" +
+                                        "最終履歴: " + latest
+                        );
+                    }
+                    TextView statusView = statusViews.get(game);
+                    if (statusView != null) {
+                        String value = getSharedPreferences("capture_status", MODE_PRIVATE)
+                                .getString(game.key, "未取得");
+                        statusView.setText(value);
+                    }
+                }
+            });
+        });
     }
 
-    private void showHistory(GameConfig game) {
-        HistoryDb db = new HistoryDb(this);
-        JSONArray history = db.latest(game.key, 100);
-        db.close();
+    private void showBannerDashboard(GameConfig game) {
+        Toast.makeText(this, "天井情報を計算しています", Toast.LENGTH_SHORT).show();
+        dbExecutor.execute(() -> {
+            Map<BannerConfig, HistoryDb.BannerStats> values = new LinkedHashMap<>();
+            try (HistoryDb db = new HistoryDb(this)) {
+                for (BannerConfig banner : game.banners) {
+                    values.put(banner, db.bannerStats(game, banner));
+                }
+            } catch (Throwable error) {
+                handler.post(() -> Toast.makeText(this, "天井情報の計算に失敗しました", Toast.LENGTH_LONG).show());
+                return;
+            }
+            handler.post(() -> showBannerDashboardDialog(game, values));
+        });
+    }
 
+    private void showBannerDashboardDialog(
+            GameConfig game,
+            Map<BannerConfig, HistoryDb.BannerStats> values
+    ) {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(16), dp(8), dp(16), dp(24));
+
+        for (BannerConfig banner : game.banners) {
+            HistoryDb.BannerStats stats = values.get(banner);
+            if (stats == null) {
+                continue;
+            }
+            content.addView(buildBannerPanel(game, banner, stats), cardMargins());
+        }
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(content);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(game.displayName + " 天井カウンター")
+                .setView(scroll)
+                .setPositiveButton("閉じる", null)
+                .create();
+        dialog.setOnShowListener(ignored -> resizeDialog(dialog));
+        dialog.show();
+    }
+
+    private View buildBannerPanel(
+            GameConfig game,
+            BannerConfig banner,
+            HistoryDb.BannerStats stats
+    ) {
+        LinearLayout panel = card();
+        TextView title = text(banner.displayName, 18, true);
+        panel.addView(title);
+
+        int topRemaining = Math.max(0, banner.fiveStarHardPity - stats.currentTopPity);
+        int midRemaining = Math.max(0, banner.fourStarHardPity - stats.currentMidPity);
+        String summary =
+                game.topRankLabel + " 天井: " + stats.currentTopPity + " / " + banner.fiveStarHardPity +
+                        "（確定まであと" + topRemaining + "連）\n" +
+                "最後の" + game.topRankLabel + ": " + formatLast(
+                        stats.lastTopName,
+                        stats.lastTopPullCount,
+                        stats.lastTopTime
+                ) + "\n\n" +
+                game.midRankLabel + " 天井: " + stats.currentMidPity + " / " + banner.fourStarHardPity +
+                        "（確定まであと" + midRemaining + "連）\n" +
+                "最後の" + game.midRankLabel + ": " + formatLast(
+                        stats.lastMidName,
+                        stats.lastMidPullCount,
+                        stats.lastMidTime
+                ) + "\n\n" +
+                "次の1連で" + game.topRankLabel + ": " +
+                        banner.formatProbability(banner.probabilityWithinNextPulls(stats.currentTopPity, 1)) + "\n" +
+                "次の10連で" + game.topRankLabel + ": " +
+                        banner.formatProbability(banner.probabilityWithinNextPulls(stats.currentTopPity, 10)) + "（推定）";
+
+        TextView body = text(summary, 14, false);
+        body.setPadding(0, dp(8), 0, dp(8));
+        panel.addView(body);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        Button both = smallButton(game.topRankLabel + "+" + game.midRankLabel);
+        both.setOnClickListener(v -> showRareHistory(game, banner, HistoryDb.RarityFilter.BOTH));
+        row.addView(both, weightedButton());
+        Button top = smallButton(game.topRankLabel);
+        top.setOnClickListener(v -> showRareHistory(game, banner, HistoryDb.RarityFilter.TOP));
+        row.addView(top, weightedButton());
+        Button mid = smallButton(game.midRankLabel);
+        mid.setOnClickListener(v -> showRareHistory(game, banner, HistoryDb.RarityFilter.MID));
+        row.addView(mid, weightedButton());
+        panel.addView(row);
+        return panel;
+    }
+
+    private void showRareHistory(
+            GameConfig game,
+            BannerConfig banner,
+            HistoryDb.RarityFilter filter
+    ) {
+        dbExecutor.execute(() -> {
+            JSONArray history;
+            try (HistoryDb db = new HistoryDb(this)) {
+                history = db.rareHistory(game, banner, filter, 200);
+            } catch (Throwable error) {
+                handler.post(() -> Toast.makeText(this, "履歴の計算に失敗しました", Toast.LENGTH_LONG).show());
+                return;
+            }
+            handler.post(() -> showRareHistoryDialog(game, banner, filter, history));
+        });
+    }
+
+    private void showRareHistoryDialog(
+            GameConfig game,
+            BannerConfig banner,
+            HistoryDb.RarityFilter filter,
+            JSONArray history
+    ) {
         if (history.length() == 0) {
-            Toast.makeText(this, "保存済み履歴はありません", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "該当する履歴はありません", Toast.LENGTH_SHORT).show();
             return;
         }
 
-        StringBuilder text = new StringBuilder();
+        StringBuilder output = new StringBuilder();
         for (int i = 0; i < history.length(); i++) {
             JSONObject item = history.optJSONObject(i);
             if (item == null) {
                 continue;
             }
-            text.append(item.optString("time"))
-                    .append("  ★").append(item.optString("rank_type"))
-                    .append("  ").append(item.optString("name"))
+            output.append(item.optString("rank_label"))
+                    .append("  ")
+                    .append(item.optString("name"))
+                    .append("\n")
+                    .append(item.optInt("pull_count"))
+                    .append("連で排出  /  ")
+                    .append(item.optString("time"))
                     .append("\n")
                     .append(item.optString("item_type"))
-                    .append(" / 種別 ").append(item.optString("gacha_type"))
                     .append("\n\n");
         }
 
-        TextView content = text(text.toString().trim(), 14, false);
+        TextView content = text(output.toString().trim(), 14, false);
         content.setTextIsSelectable(true);
-        content.setPadding(dp(20), dp(8), dp(20), dp(16));
+        content.setPadding(dp(20), dp(8), dp(20), dp(20));
         ScrollView scroll = new ScrollView(this);
         scroll.addView(content);
 
-        new AlertDialog.Builder(this)
-                .setTitle(game.displayName + "（新しい順・最大100件）")
+        String filterName = filter == HistoryDb.RarityFilter.TOP
+                ? game.topRankLabel
+                : filter == HistoryDb.RarityFilter.MID
+                ? game.midRankLabel
+                : game.topRankLabel + "・" + game.midRankLabel;
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(banner.displayName + " — " + filterName)
                 .setView(scroll)
                 .setPositiveButton("閉じる", null)
-                .show();
+                .create();
+        dialog.setOnShowListener(ignored -> resizeDialog(dialog));
+        dialog.show();
+    }
+
+    private String formatLast(String name, int pullCount, String time) {
+        if (name == null || name.isEmpty()) {
+            return "なし";
+        }
+        return name + "（" + pullCount + "連 / " + time + "）";
+    }
+
+    private void resizeDialog(AlertDialog dialog) {
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setLayout(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    Math.round(getResources().getDisplayMetrics().heightPixels * 0.88f)
+            );
+        }
     }
 
     private void registerUpdateReceiver() {
@@ -334,15 +498,15 @@ public final class MainActivity extends Activity {
     }
 
     private LinearLayout card() {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(18), dp(16), dp(18), dp(16));
+        LinearLayout result = new LinearLayout(this);
+        result.setOrientation(LinearLayout.VERTICAL);
+        result.setPadding(dp(18), dp(16), dp(18), dp(16));
         GradientDrawable background = new GradientDrawable();
         background.setColor(Color.WHITE);
         background.setCornerRadius(dp(18));
-        card.setBackground(background);
-        card.setElevation(dp(2));
-        return card;
+        result.setBackground(background);
+        result.setElevation(dp(2));
+        return result;
     }
 
     private LinearLayout.LayoutParams cardMargins() {
@@ -363,13 +527,26 @@ public final class MainActivity extends Activity {
         return params;
     }
 
+    private LinearLayout.LayoutParams weightedButton() {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        params.setMargins(dp(2), 0, dp(2), 0);
+        return params;
+    }
+
     private Button button(String label) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setTextSize(14);
-        button.setAllCaps(false);
-        button.setGravity(Gravity.CENTER);
-        return button;
+        Button result = new Button(this);
+        result.setText(label);
+        result.setTextSize(14);
+        result.setAllCaps(false);
+        result.setGravity(Gravity.CENTER);
+        return result;
+    }
+
+    private Button smallButton(String label) {
+        Button result = button(label);
+        result.setTextSize(12);
+        result.setPadding(dp(2), 0, dp(2), 0);
+        return result;
     }
 
     private TextView text(String value, int sizeSp, boolean bold) {

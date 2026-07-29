@@ -14,7 +14,14 @@ public enum GameConfig {
             "hk4e_global",
             "https://public-operation-hk4e-sg.hoyoverse.com/gacha_info/api/getGachaLog",
             "gacha_type",
-            new int[]{100, 200, 301, 302, 500}
+            new int[]{100, 200, 301, 302, 500},
+            "5", "4", "★5", "★4",
+            new BannerConfig[]{
+                    new BannerConfig("event_character", "イベント・キャラクター", new int[]{301}, 90, 0.006, 74),
+                    new BannerConfig("event_weapon", "イベント・武器", new int[]{302}, 80, 0.007, 63),
+                    new BannerConfig("chronicled", "集録祈願", new int[]{500}, 90, 0.006, 74),
+                    new BannerConfig("standard", "恒常", new int[]{100, 200}, 90, 0.006, 74)
+            }
     ),
     STAR_RAIL(
             "starrail",
@@ -23,7 +30,15 @@ public enum GameConfig {
             "hkrpg_global",
             "https://public-operation-hkrpg-sg.hoyoverse.com/common/gacha_record/api/getGachaLog",
             "gacha_type",
-            new int[]{1, 2, 11, 12, 21, 22}
+            new int[]{1, 2, 11, 12, 21, 22},
+            "5", "4", "★5", "★4",
+            new BannerConfig[]{
+                    new BannerConfig("event_character", "イベント・キャラクター", new int[]{11}, 90, 0.006, 74),
+                    new BannerConfig("event_weapon", "イベント・光円錐", new int[]{12}, 80, 0.008, 63),
+                    new BannerConfig("collab_character", "コラボ・キャラクター", new int[]{21}, 90, 0.006, 74),
+                    new BannerConfig("collab_weapon", "コラボ・光円錐", new int[]{22}, 80, 0.008, 63),
+                    new BannerConfig("standard", "恒常", new int[]{1, 2}, 90, 0.006, 74)
+            }
     ),
     ZZZ(
             "zzz",
@@ -32,7 +47,14 @@ public enum GameConfig {
             "nap_global",
             "https://public-operation-nap-sg.hoyoverse.com/common/gacha_record/api/getGachaLog",
             "real_gacha_type",
-            new int[]{1, 2, 3, 5, 102, 103}
+            new int[]{1, 2, 3, 5, 102, 103},
+            "4", "3", "S級", "A級",
+            new BannerConfig[]{
+                    new BannerConfig("event_character", "イベント・エージェント", new int[]{2, 102}, 90, 0.006, 74),
+                    new BannerConfig("event_weapon", "イベント・音動機", new int[]{3, 103}, 80, 0.010, 65),
+                    new BannerConfig("bangboo", "ボンプ", new int[]{5}, 80, 0.010, 65),
+                    new BannerConfig("standard", "恒常", new int[]{1}, 90, 0.006, 74)
+            }
     );
 
     public final String key;
@@ -42,6 +64,11 @@ public enum GameConfig {
     public final String apiPrefix;
     public final String typeParameter;
     public final int[] gachaTypes;
+    public final String topRankValue;
+    public final String midRankValue;
+    public final String topRankLabel;
+    public final String midRankLabel;
+    public final BannerConfig[] banners;
 
     GameConfig(
             String key,
@@ -50,7 +77,12 @@ public enum GameConfig {
             String marker,
             String apiPrefix,
             String typeParameter,
-            int[] gachaTypes
+            int[] gachaTypes,
+            String topRankValue,
+            String midRankValue,
+            String topRankLabel,
+            String midRankLabel,
+            BannerConfig[] banners
     ) {
         this.key = key;
         this.displayName = displayName;
@@ -59,6 +91,19 @@ public enum GameConfig {
         this.apiPrefix = apiPrefix;
         this.typeParameter = typeParameter;
         this.gachaTypes = gachaTypes;
+        this.topRankValue = topRankValue;
+        this.midRankValue = midRankValue;
+        this.topRankLabel = topRankLabel;
+        this.midRankLabel = midRankLabel;
+        this.banners = banners;
+    }
+
+    public boolean isTopRank(String rankType) {
+        return topRankValue.equals(rankType);
+    }
+
+    public boolean isMidRank(String rankType) {
+        return midRankValue.equals(rankType);
     }
 
     public static GameConfig fromKey(String key) {
