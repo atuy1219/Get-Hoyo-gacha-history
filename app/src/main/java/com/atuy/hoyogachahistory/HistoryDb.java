@@ -43,12 +43,12 @@ public final class HistoryDb extends SQLiteOpenHelper {
         onCreate(db);
     }
 
-    private void upsert(SQLiteDatabase db, String game, JSONObject item) {
+    private void upsert(SQLiteDatabase db, String game, String queryType, JSONObject item) {
         ContentValues values = new ContentValues();
         values.put("game", game);
         values.put("id", item.optString("id"));
         values.put("uid", item.optString("uid"));
-        values.put("gacha_type", item.optString("gacha_type", item.optString("real_gacha_type")));
+        values.put("gacha_type", queryType);
         values.put("item_id", item.optString("item_id"));
         values.put("time", item.optString("time"));
         values.put("item_type", item.optString("item_type"));
@@ -57,7 +57,7 @@ public final class HistoryDb extends SQLiteOpenHelper {
         db.insertWithOnConflict("history", null, values, SQLiteDatabase.CONFLICT_REPLACE);
     }
 
-    public int upsertPage(String game, JSONArray items) throws Exception {
+    public int upsertPage(String game, String queryType, JSONArray items) throws Exception {
         SQLiteDatabaseLockedException lastLock = null;
         for (int attempt = 0; attempt < LOCK_RETRY_COUNT; attempt++) {
             SQLiteDatabase db = null;
@@ -68,7 +68,7 @@ public final class HistoryDb extends SQLiteOpenHelper {
                 for (int i = 0; i < items.length(); i++) {
                     JSONObject item = items.getJSONObject(i);
                     if (!item.optString("id").isEmpty()) {
-                        upsert(db, game, item);
+                        upsert(db, game, queryType, item);
                         inserted++;
                     }
                 }
