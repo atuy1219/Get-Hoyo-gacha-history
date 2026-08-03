@@ -11,6 +11,8 @@ import android.content.ServiceConnection;
 import android.os.IBinder;
 import android.util.Log;
 
+import java.util.EnumMap;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -24,6 +26,7 @@ public final class CaptureService extends Service {
     private static final String TAG = "HoyoCapture";
     private static final String CHANNEL_ID = "gacha_capture";
     private static final int NOTIFICATION_ID = 1219;
+    private static final Map<GameConfig, String> CAPTURED_URLS = new EnumMap<>(GameConfig.class);
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -55,6 +58,23 @@ public final class CaptureService extends Service {
             .debuggable(BuildConfig.DEBUG)
             .version(BuildConfig.VERSION_CODE);
 
+    static synchronized String getCapturedUrl(GameConfig game) {
+        return CAPTURED_URLS.get(game);
+    }
+
+    static synchronized boolean hasCapturedUrl(GameConfig game) {
+        String url = CAPTURED_URLS.get(game);
+        return url != null && !url.isEmpty();
+    }
+
+    static synchronized void clearCapturedUrl(GameConfig game) {
+        CAPTURED_URLS.remove(game);
+    }
+
+    private static synchronized void setCapturedUrl(GameConfig game, String url) {
+        CAPTURED_URLS.put(game, url);
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -78,6 +98,8 @@ public final class CaptureService extends Service {
             return START_NOT_STICKY;
         }
 
+        clearCapturedUrl(currentGame);
+        broadcastUpdate();
         startForeground(
                 NOTIFICATION_ID,
                 buildNotification(currentGame.displayName + "の履歴URLを待機中", "ゲーム内のガチャ履歴画面を開いてください", true)
@@ -108,6 +130,8 @@ public final class CaptureService extends Service {
                 throw new IllegalStateException("2分以内に認証URLを検出できませんでした");
             }
 
+            setCapturedUrl(currentGame, url);
+            broadcastUpdate();
             updateNotification(
                     currentGame.displayName + "のURLを取得済み",
                     "公式APIから履歴を読み込んでいます"
