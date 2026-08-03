@@ -4,6 +4,8 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.BroadcastReceiver;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -45,6 +47,7 @@ public final class MainActivity extends Activity {
     private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor();
     private final Map<GameConfig, TextView> statsViews = new EnumMap<>(GameConfig.class);
     private final Map<GameConfig, TextView> statusViews = new EnumMap<>(GameConfig.class);
+    private final Map<GameConfig, Button> copyUrlButtons = new EnumMap<>(GameConfig.class);
     private TextView shizukuStatus;
     private GameConfig pendingGame;
 
@@ -171,6 +174,12 @@ public final class MainActivity extends Activity {
         capture.setOnClickListener(v -> requestCapture(game));
         gameCard.addView(capture, matchWidth());
 
+        Button copyUrl = button("認証URLをコピー");
+        copyUrl.setEnabled(false);
+        copyUrl.setOnClickListener(v -> copyCapturedUrl(game));
+        copyUrlButtons.put(game, copyUrl);
+        gameCard.addView(copyUrl, matchWidth());
+
         Button dashboard = button("ガチャ別の天井・履歴を見る");
         dashboard.setOnClickListener(v -> showBannerDashboard(game));
         gameCard.addView(dashboard, matchWidth());
@@ -189,6 +198,8 @@ public final class MainActivity extends Activity {
     private void beginCapture(GameConfig game) {
         pendingGame = null;
         requestNotificationPermissionIfNeeded();
+        CaptureService.clearCapturedUrl(game);
+        updateCopyButton(game);
 
         Intent service = new Intent(this, CaptureService.class)
                 .putExtra(CaptureService.EXTRA_GAME, game.key);
@@ -208,6 +219,34 @@ public final class MainActivity extends Activity {
             launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(launch);
         }, 1500L);
+    }
+
+    private void copyCapturedUrl(GameConfig game) {
+        String url = CaptureService.getCapturedUrl(game);
+        if (url == null || url.isEmpty()) {
+            Toast.makeText(this, "先に履歴URLを取得してください", Toast.LENGTH_SHORT).show();
+            updateCopyButton(game);
+            return;
+        }
+
+        ClipboardManager clipboard = getSystemService(ClipboardManager.class);
+        if (clipboard == null) {
+            Toast.makeText(this, "クリップボードを利用できません", Toast.LENGTH_LONG).show();
+            return;
+        }
+        clipboard.setPrimaryClip(ClipData.newPlainText(game.displayName + " 認証URL", url));
+        Toast.makeText(
+                this,
+                "認証URLをコピーしました。第三者には共有しないでください",
+                Toast.LENGTH_LONG
+        ).show();
+    }
+
+    private void updateCopyButton(GameConfig game) {
+        Button copyButton = copyUrlButtons.get(game);
+        if (copyButton != null) {
+            copyButton.setEnabled(CaptureService.hasCapturedUrl(game));
+        }
     }
 
     private void refreshShizukuStatus() {
@@ -307,6 +346,7 @@ public final class MainActivity extends Activity {
                                 .getString(game.key, "未取得");
                         statusView.setText(value);
                     }
+                    updateCopyButton(game);
                 }
             });
         });
